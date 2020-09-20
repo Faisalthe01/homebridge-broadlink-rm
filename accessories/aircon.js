@@ -22,7 +22,8 @@ class AirConAccessory extends BroadlinkRMAccessory {
       auto: Characteristic.TargetHeatingCoolingState.AUTO
     };
     this.HeatingCoolingStates = HeatingCoolingStates;
-    this.heatOnly = config.heatOnly || false;
+    config.heatOnly = config.heatOnly || false;
+    config.coolOnly = config.coolOnly || false;
 
     const HeatingCoolingConfigKeys = {};
     HeatingCoolingConfigKeys[Characteristic.TargetHeatingCoolingState.OFF] = 'off';
@@ -85,6 +86,8 @@ class AirConAccessory extends BroadlinkRMAccessory {
       assert.isAbove(config.pseudoDeviceTemperature, config.minTemperature - 1, `\x1b[31m[CONFIG ERROR] \x1b[33mpseudoDeviceTemperature\x1b[0m (${config.pseudoDeviceTemperature}) must be more than the minTemperature (${config.minTemperature})`)
     }
 
+    // minTemperature can't be more than 10 or HomeKit throws a fit - This limitation has been removed
+    //assert.isBelow(config.minTemperature, 11, `\x1b[31m[CONFIG ERROR] \x1b[33mminTemperature\x1b[0m (${config.minTemperature}) must be <= 10`)
 
     // maxTemperature > minTemperature
     assert.isBelow(config.minTemperature, config.maxTemperature, `\x1b[31m[CONFIG ERROR] \x1b[33mmaxTemperature\x1b[0m (${config.minTemperature}) must be more than minTemperature (${config.minTemperature})`)
@@ -349,9 +352,8 @@ class AirConAccessory extends BroadlinkRMAccessory {
 
     log(`${name} monitorTemperature`);
 
-    // this call appears to be creating duplicate calls and delaying status refreshes
-    // device.on('temperature', this.onTemperature.bind(this));
-    // device.checkTemperature();
+    device.on('temperature', this.onTemperature.bind(this));
+    device.checkTemperature();
 
     this.updateTemperatureUI();
     if (!config.isUnitTest) setInterval(this.updateTemperatureUI.bind(this), config.temperatureUpdateFrequency * 1000)
@@ -390,13 +392,13 @@ class AirConAccessory extends BroadlinkRMAccessory {
   }
 
   addTemperatureCallbackToQueue (callback) {
-    const { config, host, log, name, state } = this;
+    const { config, host, debug, log, name, state } = this;
     const { mqttURL, temperatureFilePath, w1DeviceID } = config;
 
     // Clear the previous callback
     if (Object.keys(this.temperatureCallbackQueue).length > 1) {
       if (state.currentTemperature) {
-        log(`${name} addTemperatureCallbackToQueue (clearing previous callback, using existing temperature)`);
+        if (debug) log(`\x1b[34m[DEBUG]\x1b[0m ${name} addTemperatureCallbackToQueue (clearing previous callback, using existing temperature)`);
 
         this.processQueuedTemperatureCallbacks(state.currentTemperature);
       }
@@ -443,7 +445,7 @@ class AirConAccessory extends BroadlinkRMAccessory {
     }
 
     device.checkTemperature();
-    log(`${name} addTemperatureCallbackToQueue (requested temperature from device, waiting)`);
+    if (debug) log(`\x1b[34m[DEBUG]\x1b[0m ${name} addTemperatureCallbackToQueue (requested temperature from device, waiting)`);
   }
 
   updateTemperatureFromFile () {
@@ -518,19 +520,19 @@ class AirConAccessory extends BroadlinkRMAccessory {
     serviceManager.refreshCharacteristicUI(Characteristic.CurrentTemperature)
   }
 
-        getCurrentTemperature (callback) {
-    const { config, host, log, name, state } = this;
+  getCurrentTemperature (callback) {
+    const { config, host, debug, log, name, state } = this;
     const { pseudoDeviceTemperature } = config;
 
     // Some devices don't include a thermometer and so we can use `pseudoDeviceTemperature` instead
     if (pseudoDeviceTemperature !== undefined) {
-      log(`${name} getCurrentTemperature (using pseudoDeviceTemperature ${pseudoDeviceTemperature} from config)`);
+      if (debug) log(`\x1b[34m[DEBUG]\x1b[0m ${name} getCurrentTemperature (using pseudoDeviceTemperature ${pseudoDeviceTemperature} from config)`);
 
       return callback(null, pseudoDeviceTemperature);
     }
 
     this.addTemperatureCallbackToQueue(callback);
-        }
+  }
 
   async checkTemperatureForAutoOnOff (temperature) {
     const { config, host, log, name, serviceManager, state } = this;
@@ -683,6 +685,25 @@ class AirConAccessory extends BroadlinkRMAccessory {
         ignorePreviousValue: true
       }
     });
+    
+ if (config.heatOnly == true) {
+    	this.serviceManager
+        .getCharacteristic(Characteristic.TargetHeatingCoolingState)
+		.setProps({
+			 minValue: 0,
+			 maxValue: 1,
+			 validValues: [0,1]
+				});
+		}
+ if (config.coolOnly == true) {
+    	this.serviceManager
+        .getCharacteristic(Characteristic.TargetHeatingCoolingState)
+		.setProps({
+			 minValue: 0,
+			 maxValue: 2,
+			 validValues: [0,2]
+				});
+		}
 
     this.serviceManager.addGetCharacteristic({
       name: 'currentTemperature',
@@ -697,7 +718,7 @@ class AirConAccessory extends BroadlinkRMAccessory {
       method: this.getTemperatureDisplayUnits,
       bind: this
     })
-
+    
     this.serviceManager
       .getCharacteristic(Characteristic.TargetTemperature)
       .setProps({
@@ -705,15 +726,6 @@ class AirConAccessory extends BroadlinkRMAccessory {
         maxValue: maxTemperature,
         minStep: 1
       });
-    
- if (this.heatOnly) {
-	this.service.getCharacteristic(Characteristic.TargetHeatingCoolingState)
-	.setProps({
-	minValue: 0,
-	maxValue: 1,
-	validValues: [0,1]	
-				});
-		}
 
     this.serviceManager
       .getCharacteristic(Characteristic.CurrentTemperature)
